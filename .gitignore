@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+
+# VS Code / IDE
+.vscode/
+.idea/
+
+# Entorno
+.env
+*.env
+
+# Base de datos local (no subir)
+*.sqlite3
+attendance.sqlite3
+
+# DeepFace: ignorar representaciones / artefactos pesados
+db/**/representations_*.pkl
+db/**/*.pkl
+
+# Permitir imágenes de ejemplo en db/
+!db/**/*.jpg
+!db/**/*.jpeg
+!db/**/*.png
+!db/**/*.gif
+!db/**/.gitkeep
+!db/**/README.md
+
+# Otros
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+Thumbs.db
+*.log
