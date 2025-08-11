@@ -212,7 +212,8 @@ async def root():
             /* Modal detalle */
             .modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;padding:16px;z-index:1000}
             .modalContent{background:#fff;max-width:720px;width:100%;border-radius:12px;box-shadow:0 12px 28px rgba(0,0,0,.25);padding:16px;position:relative}
-            .modalClose{position:absolute;top:8px;right:10px;background:#eee;border:none;border-radius:8px;padding:6px 10px;cursor:pointer}
+            .modalClose{position:absolute;top:8px;right:10px;background:#dc3545;color:#fff;border:none;border-radius:8px;padding:6px 10px;cursor:pointer;font-weight:bold;transition:background-color 0.2s}
+            .modalClose:hover{background:#c82333}
             .cardItem{cursor:pointer}
             /* Toast */
             .toast{position:absolute;top:10px;left:50%;background:linear-gradient(135deg,#4b3bc9,#6c56cf);color:#fff;padding:12px 18px;border-radius:14px;box-shadow:0 14px 32px rgba(0,0,0,.32);opacity:0;transform:translate(-50%,0) scale(.98);transition:all .25s;z-index:5;border-left:6px solid #ffe082;display:flex;align-items:center;gap:10px;text-align:center;white-space:nowrap;max-width:none}
@@ -542,7 +543,6 @@ async def root():
                                                                                         <option value="" ${gender===''?'selected':''}>-</option>
                                                                                         <option ${gender==='Femenino'?'selected':''}>Femenino</option>
                                                                                         <option ${gender==='Masculino'?'selected':''}>Masculino</option>
-                                                                                        <option ${gender==='No especificado'?'selected':''}>No especificado</option>
                                                                                 </select>
                                                                         </label>
                                                                 </div>
@@ -657,7 +657,7 @@ async def root():
                                                                 }
             </script>
                         <!-- Modal de detalle de estudiante -->
-                        <div id="modal" class="modal" onclick="if(event.target.id==='modal') closeModal()">
+                        <div id="modal" class="modal">
                                 <div class="modalContent">
                                         <button class="modalClose" onclick="closeModal()">✕</button>
                                         <div id="modalBody"></div>
@@ -909,7 +909,7 @@ def metrics_detailed(start: Optional[date] = Query(None), end: Optional[date] = 
         gender_counts: Dict[str, int] = {}
         buckets: Dict[str, int] = {'7:30-7:45': 0, '7:45-8:00': 0, '8:00-8:15': 0, '8:15-8:30': 0, '8:30+': 0}
         for att, st in rows:
-                g = (st.gender or 'No especificado')
+                g = (st.gender or '-')
                 gender_counts[g] = gender_counts.get(g, 0) + 1
                 t = att.time.time()
                 if t >= datetime.strptime('07:30','%H:%M').time() and t < datetime.strptime('07:45','%H:%M').time():
@@ -1004,13 +1004,23 @@ def delete_student(student_id: int, db: Session = Depends(get_db)):
         
         # Eliminar archivo de foto en students/
         students_folder = os.path.abspath(os.path.join(base_dir, '..', 'students'))
-        student_photo = os.path.join(students_folder, f"{st.code}.jpg")
-        if os.path.exists(student_photo):
-                try:
-                        os.remove(student_photo)
-                        print(f"[delete] Eliminada foto: {student_photo}")
-                except Exception as e:
-                        print(f"[delete] Error al eliminar foto {student_photo}: {e}")
+        # Buscar archivo con cualquier extensión común de imagen
+        possible_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']
+        student_photo_deleted = False
+        
+        for ext in possible_extensions:
+                student_photo = os.path.join(students_folder, f"{st.code}{ext}")
+                if os.path.exists(student_photo):
+                        try:
+                                os.remove(student_photo)
+                                print(f"[delete] Eliminada foto: {student_photo}")
+                                student_photo_deleted = True
+                                break  # Solo eliminar la primera que encuentre
+                        except Exception as e:
+                                print(f"[delete] Error al eliminar foto {student_photo}: {e}")
+        
+        if not student_photo_deleted:
+                print(f"[delete] No se encontró foto para el estudiante {st.code} en {students_folder}")
         
         db.delete(st)
         db.commit()
@@ -1161,14 +1171,19 @@ def admin_clear_students_all(db: Session = Depends(get_db)):
                 print(f"[clear-all] Error al eliminar carpeta db {db_folder}: {e}")
         
         # Eliminar archivo de foto en students/
-        student_photo = os.path.join(students_base, f"{st.code}.jpg")
-        if os.path.exists(student_photo):
-            try:
-                os.remove(student_photo)
-                files_cleaned += 1
-                print(f"[clear-all] Eliminada foto: {student_photo}")
-            except Exception as e:
-                print(f"[clear-all] Error al eliminar foto {student_photo}: {e}")
+        # Buscar archivo con cualquier extensión común de imagen
+        possible_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']
+        
+        for ext in possible_extensions:
+            student_photo = os.path.join(students_base, f"{st.code}{ext}")
+            if os.path.exists(student_photo):
+                try:
+                    os.remove(student_photo)
+                    files_cleaned += 1
+                    print(f"[clear-all] Eliminada foto: {student_photo}")
+                    break  # Solo eliminar la primera que encuentre
+                except Exception as e:
+                    print(f"[clear-all] Error al eliminar foto {student_photo}: {e}")
     
     deleted = db.query(Student).delete(synchronize_session=False)
     db.commit()
