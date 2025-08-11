@@ -989,9 +989,32 @@ def delete_student(student_id: int, db: Session = Depends(get_db)):
         st = db.get(Student, student_id)
         if not st:
                 raise HTTPException(404, 'No encontrado')
+        
+        # Eliminar archivos físicos del estudiante
+        base_dir = os.path.dirname(__file__)
+        
+        # Eliminar carpeta del estudiante en db/
+        db_folder = os.path.abspath(os.path.join(base_dir, '..', 'db', st.code))
+        if os.path.exists(db_folder):
+                try:
+                        shutil.rmtree(db_folder)
+                        print(f"[delete] Eliminada carpeta db: {db_folder}")
+                except Exception as e:
+                        print(f"[delete] Error al eliminar carpeta db {db_folder}: {e}")
+        
+        # Eliminar archivo de foto en students/
+        students_folder = os.path.abspath(os.path.join(base_dir, '..', 'students'))
+        student_photo = os.path.join(students_folder, f"{st.code}.jpg")
+        if os.path.exists(student_photo):
+                try:
+                        os.remove(student_photo)
+                        print(f"[delete] Eliminada foto: {student_photo}")
+                except Exception as e:
+                        print(f"[delete] Error al eliminar foto {student_photo}: {e}")
+        
         db.delete(st)
         db.commit()
-        return {"deleted": True}
+        return {"deleted": True, "files_cleaned": True}
 
 
 # Crear estudiante desde form-data (con foto subida)
@@ -1087,9 +1110,9 @@ async def update_student_form(
                 except Exception:
                         pass
 
-        db.commit()
+        db.commit();
         db.refresh(st)
-        return st
+        return st;
 
 
 # Historial de asistencia por estudiante
@@ -1112,4 +1135,42 @@ def student_attendance_history(student_id: int = Path(..., ge=1), limit: int = Q
                         'status': r.status,
                 } for r in rows
         ]
+
+
+@app.post('/admin/students/clear-all')
+@app.get('/admin/students/clear-all')
+def admin_clear_students_all(db: Session = Depends(get_db)):
+    # Obtener lista de estudiantes antes de eliminar
+    students = db.query(Student).all()
+    
+    # Eliminar archivos físicos de todos los estudiantes
+    base_dir = os.path.dirname(__file__)
+    db_base = os.path.abspath(os.path.join(base_dir, '..', 'db'))
+    students_base = os.path.abspath(os.path.join(base_dir, '..', 'students'))
+    
+    files_cleaned = 0
+    for st in students:
+        # Eliminar carpeta en db/
+        db_folder = os.path.join(db_base, st.code)
+        if os.path.exists(db_folder):
+            try:
+                shutil.rmtree(db_folder)
+                files_cleaned += 1
+                print(f"[clear-all] Eliminada carpeta db: {db_folder}")
+            except Exception as e:
+                print(f"[clear-all] Error al eliminar carpeta db {db_folder}: {e}")
+        
+        # Eliminar archivo de foto en students/
+        student_photo = os.path.join(students_base, f"{st.code}.jpg")
+        if os.path.exists(student_photo):
+            try:
+                os.remove(student_photo)
+                files_cleaned += 1
+                print(f"[clear-all] Eliminada foto: {student_photo}")
+            except Exception as e:
+                print(f"[clear-all] Error al eliminar foto {student_photo}: {e}")
+    
+    deleted = db.query(Student).delete(synchronize_session=False)
+    db.commit()
+    return {"deleted": deleted, "files_cleaned": files_cleaned}
 
