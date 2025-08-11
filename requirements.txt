@@ -10,3 +10,4 @@ httpx==0.27.0
 pytest==8.2.2
 SQLAlchemy==2.0.36
 python-dateutil==2.9.0.post0
+reportlab==4.2.5

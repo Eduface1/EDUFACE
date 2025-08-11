@@ -1,5 +1,5 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Depends, Query, Path
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from deepface import DeepFace
@@ -10,7 +10,15 @@ import os
 from datetime import date, datetime, timedelta
 from .db import init_db, SessionLocal, Student, Attendance
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from pydantic import BaseModel
+from io import BytesIO
+from reportlab.lib.pagesizes import letter, A4
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
 
 
 app = FastAPI(title="EDUFACE API", version="1.0.0")
@@ -250,13 +258,17 @@ async def root():
                                                                 <div id="camOverlay" class="camOverlay">
                                                                         <div class="camTitle">📹 Cámara de Reconocimiento Facial</div>
                                                                         <div class="camControls">
-                                                                                <button id="btnStart">Iniciar</button>
+                                                                                <button id="btnStart" style='background:linear-gradient(135deg, #28a745 0%, #20c997 100%);color:#fff;border:none;padding:12px 24px;border-radius:8px;cursor:pointer;font-weight:600;font-size:14px;transition:all 0.3s ease;box-shadow:0 2px 4px rgba(40,167,69,0.3);'>
+                                                                                    ▶️ Iniciar Control
+                                                                                </button>
                                                                         </div>
                                                                 </div>
                                                                 <div id="toast" class="toast"></div>
                                                         </div>
                                                         <div id="stopRow" class='row' style="justify-content:center;margin-top:8px;display:none">
-                                                                <button id="btnStop">Detener</button>
+                                                                <button id="btnStop" style='background:linear-gradient(135deg, #dc3545 0%, #c82333 100%);color:#fff;border:none;padding:12px 24px;border-radius:8px;cursor:pointer;font-weight:600;font-size:14px;transition:all 0.3s ease;box-shadow:0 2px 4px rgba(220,53,69,0.3);'>
+                                                                    ⏹️ Detener Control
+                                                                </button>
                                                         </div>
                                                 </div>
                                                 <div>
@@ -304,13 +316,16 @@ async def root():
                                     <option value='C'>C</option>
                                 </select>
                             </label>
-                            <button id='btnRefresh'>Actualizar</button>
+                            <button id='btnRefresh' style='background:linear-gradient(135deg, #28a745 0%, #20c997 100%);color:#fff;border:none;padding:12px 24px;border-radius:8px;cursor:pointer;font-weight:600;font-size:14px;transition:all 0.3s ease;box-shadow:0 2px 4px rgba(40,167,69,0.3);'>
+                                🔄 Actualizar
+                            </button>
                         </div>
                         <div class='kpis'>
                             <div class='kpi'><div>Total estudiantes</div><div id='k_students' class='num'>-</div></div>
                             <div class='kpi'><div>Registros</div><div id='k_records' class='num'>-</div></div>
                             <div class='kpi'><div>Puntualidad</div><div id='k_punctual' class='num'>-</div></div>
                             <div class='kpi'><div>Tarde</div><div id='k_late' class='num'>-</div></div>
+                            <div class='kpi'><div>Ausentes</div><div id='k_absent' class='num'>-</div></div>
                         </div>
                     </div>
                     
@@ -325,6 +340,53 @@ async def root():
 
                 <section id='analysis' class='card' style='display:none'>
                     <h2>Análisis Detallado</h2>
+                    
+                    <!-- Panel de Exportación PDF -->
+                    <div style='background:#f8f9fa;border:1px solid #dee2e6;border-radius:12px;padding:20px;margin-bottom:24px;box-shadow:0 2px 6px rgba(0,0,0,.1)'>
+                        <h3 style='margin:0 0 16px 0;color:#495057;display:flex;align-items:center;gap:8px;'>
+                            <span>📋</span> Exportar Reporte de Asistencia
+                        </h3>
+                        <div class='grid2' style='gap:16px;margin-bottom:16px;'>
+                            <div style='display:flex;flex-direction:column;gap:4px;'>
+                                <label style='font-weight:600;color:#495057;font-size:14px;'>Fecha:</label>
+                                <input type='date' id='exportDate' style='padding:10px;border:1px solid #ced4da;border-radius:6px;font-size:14px;'>
+                            </div>
+                            <div style='display:flex;flex-direction:column;gap:4px;'>
+                                <label style='font-weight:600;color:#495057;font-size:14px;'>Grado:</label>
+                                <select id='exportGrade' style='padding:10px;border:1px solid #ced4da;border-radius:6px;font-size:14px;background:#fff;'>
+                                    <option value=''>Todos los grados</option>
+                                    <option value='1'>1ro</option>
+                                    <option value='2'>2do</option>
+                                    <option value='3'>3ro</option>
+                                    <option value='4'>4to</option>
+                                    <option value='5'>5to</option>
+                                    <option value='6'>6to</option>
+                                </select>
+                            </div>
+                            <div style='display:flex;flex-direction:column;gap:4px;'>
+                                <label style='font-weight:600;color:#495057;font-size:14px;'>Sección:</label>
+                                <select id='exportSection' style='padding:10px;border:1px solid #ced4da;border-radius:6px;font-size:14px;background:#fff;'>
+                                    <option value=''>Todas las secciones</option>
+                                    <option value='A'>Sección A</option>
+                                    <option value='B'>Sección B</option>
+                                    <option value='C'>Sección C</option>
+                                </select>
+                            </div>
+                            <div style='display:flex;flex-direction:column;gap:4px;'>
+                                <label style='font-weight:600;color:#495057;font-size:14px;'>Estado:</label>
+                                <select id='exportStatus' style='padding:10px;border:1px solid #ced4da;border-radius:6px;font-size:14px;background:#fff;'>
+                                    <option value=''>Todos los estados</option>
+                                    <option value='Puntual'>Puntuales</option>
+                                    <option value='Tarde'>Tardanza</option>
+                                    <option value='Ausente'>Ausentes</option>
+                                </select>
+                            </div>
+                        </div>
+                        <button id='btnExportPDF' style='background:linear-gradient(135deg, #667eea 0%, #764ba2 100%);color:#fff;border:none;padding:12px 24px;border-radius:8px;cursor:pointer;font-weight:600;font-size:14px;transition:all 0.3s ease;box-shadow:0 2px 4px rgba(102,126,234,0.3);'>
+                            📄 Generar Reporte PDF
+                        </button>
+                    </div>
+                    
                     <div class='grid2'>
                         <div><h3>Distribución por Género</h3><canvas id='chGender' height='120'></canvas></div>
                         <div><h3>Patrones de Llegada por Hora</h3><canvas id='chArrival' height='120'></canvas></div>
@@ -341,7 +403,9 @@ async def root():
                                         <section id='manage' class='card' style='display:none'>
                                                 <div class='row' style='align-items:center;gap:12px;'>
                                                         <h2 style='margin:0'>Gestión de Estudiantes</h2>
-                                                        <button id='btnAddStudent'>Agregar estudiante</button>
+                                                        <button id='btnAddStudent' style='background:linear-gradient(135deg, #007bff 0%, #0056b3 100%);color:#fff;border:none;padding:12px 24px;border-radius:8px;cursor:pointer;font-weight:600;font-size:14px;transition:all 0.3s ease;box-shadow:0 2px 4px rgba(0,123,255,0.3);'>
+                                                            ➕ Agregar Estudiante
+                                                        </button>
                                                 </div>
                                                 <h3 style='margin-top:12px'>Lista de Estudiantes</h3>
                                                 <table>
@@ -492,6 +556,7 @@ async def root():
                     k_records.textContent = j.records_total;
                     k_punctual.textContent = j.punctuality_pct + '%';
                     k_late.textContent = j.late_pct + '%';
+                    k_absent.textContent = j.absent_pct + '%';
                 }
                 async function loadWeekly(){
                     const r = await fetch('/metrics/weekly');
@@ -544,7 +609,7 @@ async def root():
                                                                 <td>${s.gender||''}</td>
                                                                 <td>${dreg}</td>
                                                                 <td>${img}</td>
-                                                                <td><button onclick="editStudent(${s.id})">Editar</button></td>
+                                                                <td><button onclick="editStudent(${s.id})" style='background:linear-gradient(135deg, #ffc107 0%, #e0a800 100%);color:#000;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:600;font-size:12px;transition:all 0.3s ease;box-shadow:0 2px 4px rgba(255,193,7,0.3);'>✏️ Editar</button></td>
                                                         </tr>`
                                                 }).join('');
                                         }
@@ -597,9 +662,13 @@ async def root():
                                                                 </div>
                                                         </div>
                                                         <div class="row" style="margin-top:12px">
-                                                                <button type="submit">Guardar</button>
-                                                                <button type="button" onclick="closeModal()" style="background:#999">Cancelar</button>
-                                                                ${isEdit?'<button type="button" id="btnDelete" style="background:#c62828">Eliminar</button>':''}
+                                                                <button type="submit" style='background:linear-gradient(135deg, #28a745 0%, #20c997 100%);color:#fff;border:none;padding:12px 24px;border-radius:8px;cursor:pointer;font-weight:600;font-size:14px;transition:all 0.3s ease;box-shadow:0 2px 4px rgba(40,167,69,0.3); margin-right: 8px;'>
+                                                                    💾 Guardar
+                                                                </button>
+                                                                <button type="button" onclick="closeModal()" style="background:linear-gradient(135deg, #6c757d 0%, #495057 100%);color:#fff;border:none;padding:12px 24px;border-radius:8px;cursor:pointer;font-weight:600;font-size:14px;transition:all 0.3s ease;box-shadow:0 2px 4px rgba(108,117,125,0.3); margin-right: 8px;">
+                                                                    ✖️ Cancelar
+                                                                </button>
+                                                                ${isEdit?'<button type="button" id="btnDelete" style="background:linear-gradient(135deg, #dc3545 0%, #c82333 100%);color:#fff;border:none;padding:12px 24px;border-radius:8px;cursor:pointer;font-weight:600;font-size:14px;transition:all 0.3s ease;box-shadow:0 2px 4px rgba(220,53,69,0.3);">🗑️ Eliminar</button>':''}
                                                         </div>
                                                 </form>`
                                         }
@@ -652,6 +721,61 @@ async def root():
                                                 const st = await (await fetch('/students/'+id)).json();
                                                 openStudentForm(st);
                                         }
+
+                // Función para exportar PDF
+                async function exportToPDF() {
+                    const date = document.getElementById('exportDate').value;
+                    const grade = document.getElementById('exportGrade').value;
+                    const section = document.getElementById('exportSection').value;
+                    const status = document.getElementById('exportStatus').value;
+                    
+                    if (!date) {
+                        alert('Por favor selecciona una fecha para generar el reporte.');
+                        return;
+                    }
+                    
+                    // Preparar parámetros de filtro
+                    const params = new URLSearchParams();
+                    params.append('date', date);
+                    if (grade) params.append('grade', grade);
+                    if (section) params.append('section', section);
+                    if (status) params.append('status', status);
+                    
+                    try {
+                        document.getElementById('btnExportPDF').innerHTML = '⏳ Generando PDF...';
+                        document.getElementById('btnExportPDF').disabled = true;
+                        
+                        const response = await fetch(`/export/pdf?${params.toString()}`);
+                        
+                        if (!response.ok) {
+                            throw new Error('Error al generar el PDF');
+                        }
+                        
+                        // Descargar el archivo
+                        const blob = await response.blob();
+                        const url = window.URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `reporte_asistencia_${date}.pdf`;
+                        document.body.appendChild(a);
+                        a.click();
+                        window.URL.revokeObjectURL(url);
+                        document.body.removeChild(a);
+                        
+                    } catch (error) {
+                        console.error('Error:', error);
+                        alert('Error al generar el PDF. Intenta nuevamente.');
+                    } finally {
+                        document.getElementById('btnExportPDF').innerHTML = '📄 Generar Reporte PDF';
+                        document.getElementById('btnExportPDF').disabled = false;
+                    }
+                }
+                
+                // Configurar fecha por defecto a hoy
+                document.getElementById('exportDate').value = new Date().toISOString().split('T')[0];
+                
+                // Vincular evento del botón
+                document.getElementById('btnExportPDF').onclick = exportToPDF;
 
                 // Cargas iniciales
                 refreshToday(); refreshTodayKPIs();
@@ -935,11 +1059,40 @@ def metrics_summary(
         punctuality = (punctual / total * 100.0) if total else 0.0
         late_pct = (late / total * 100.0) if total else 0.0
         
+        # Calcular ausentes: estudiantes registrados sin asistencia en el período
+        if start and end:
+            # Para un rango de fechas específico, calcular días únicos con asistencia
+            unique_students_with_attendance = db.query(Attendance.student_id).join(Student, Student.id == Attendance.student_id)
+            if start:
+                unique_students_with_attendance = unique_students_with_attendance.filter(Attendance.date >= start)
+            if end:
+                unique_students_with_attendance = unique_students_with_attendance.filter(Attendance.date <= end)
+            if grade:
+                unique_students_with_attendance = unique_students_with_attendance.filter(Student.grade == grade)
+            if section:
+                unique_students_with_attendance = unique_students_with_attendance.filter(Student.section == section)
+            
+            students_with_attendance = unique_students_with_attendance.distinct().count()
+            absent_students = students_total - students_with_attendance
+            absent_pct = (absent_students / students_total * 100.0) if students_total else 0.0
+        else:
+            # Para todos los registros, los ausentes son los que nunca tuvieron asistencia
+            students_with_any_attendance = db.query(Attendance.student_id).join(Student, Student.id == Attendance.student_id)
+            if grade:
+                students_with_any_attendance = students_with_any_attendance.filter(Student.grade == grade)
+            if section:
+                students_with_any_attendance = students_with_any_attendance.filter(Student.section == section)
+            
+            students_with_attendance = students_with_any_attendance.distinct().count()
+            absent_students = students_total - students_with_attendance
+            absent_pct = (absent_students / students_total * 100.0) if students_total else 0.0
+        
         return {
                 "students_total": students_total,
                 "records_total": total,
                 "punctuality_pct": round(punctuality, 2),
                 "late_pct": round(late_pct, 2),
+                "absent_pct": round(absent_pct, 2),
         }
 
 
@@ -1269,4 +1422,216 @@ def admin_clear_students_all(db: Session = Depends(get_db)):
     deleted = db.query(Student).delete(synchronize_session=False)
     db.commit()
     return {"deleted": deleted, "files_cleaned": files_cleaned}
+
+
+# Clase auxiliar para registros de estudiantes ausentes
+class AbsentAttendance:
+    def __init__(self, student, target_date):
+        self.student = student
+        self.time = datetime.combine(target_date, datetime.min.time()) if isinstance(target_date, date) else target_date
+        self.status = 'Ausente'
+        self.confidence = 0.0
+
+
+@app.get('/export/pdf')
+def export_attendance_pdf(
+    date: str = Query(..., description="Fecha en formato YYYY-MM-DD"),
+    grade: Optional[str] = Query(None, description="Grado a filtrar (1-6)"),
+    section: Optional[str] = Query(None, description="Sección a filtrar (A, B, C)"),
+    status: Optional[str] = Query(None, description="Estado a filtrar (Puntual, Tarde, Ausente)"),
+    db: Session = Depends(get_db)
+):
+    """Generar reporte de asistencia en formato PDF"""
+    try:
+        # Validar fecha
+        try:
+            target_date = datetime.strptime(date, '%Y-%m-%d').date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Formato de fecha inválido. Use YYYY-MM-DD")
+        
+        # Construir consulta base para registros de asistencia
+        query = db.query(Attendance).join(Student).filter(
+            func.date(Attendance.time) == target_date
+        )
+        
+        # Aplicar filtros opcionales
+        if grade and grade.isdigit():
+            query = query.filter(Student.grade == int(grade))
+        if section:
+            query = query.filter(Student.section == section.upper())
+        if status and status != 'Ausente':
+            query = query.filter(Attendance.status == status)
+        
+        # Obtener registros de asistencia
+        attendances = query.all()
+        
+        # Si se filtra específicamente por "Ausente", solo mostrar ausentes
+        if status == 'Ausente':
+            print(f"[PDF DEBUG] Generando reporte solo de ausentes para fecha: {target_date}")
+            
+            # Obtener todos los estudiantes que deberían haber asistido
+            students_query = db.query(Student)
+            if grade and grade.isdigit():
+                students_query = students_query.filter(Student.grade == int(grade))
+            if section:
+                students_query = students_query.filter(Student.section == section.upper())
+            
+            all_students = students_query.all()
+            
+            # Estudiantes que sí asistieron (aplicando los mismos filtros)
+            attended_query = db.query(Attendance).join(Student).filter(
+                func.date(Attendance.time) == target_date
+            )
+            if grade and grade.isdigit():
+                attended_query = attended_query.filter(Student.grade == int(grade))
+            if section:
+                attended_query = attended_query.filter(Student.section == section.upper())
+            
+            attended_student_ids = {att.student_id for att in attended_query.all()}
+            
+            # Crear registros ficticios para estudiantes ausentes
+            absent_attendances = []
+            for student in all_students:
+                if student.id not in attended_student_ids:
+                    absent_attendances.append(AbsentAttendance(student, target_date))
+            
+            attendances = absent_attendances
+            
+        # Si no hay filtro de estado específico o es cualquier otro caso, incluir ausentes también
+        elif not status or status == '':  # "Todos los estados"
+            print(f"[PDF DEBUG] Generando reporte de TODOS los estados (incluyendo ausentes)")
+            
+            # Obtener todos los estudiantes que deberían haber asistido
+            students_query = db.query(Student)
+            if grade and grade.isdigit():
+                students_query = students_query.filter(Student.grade == int(grade))
+            if section:
+                students_query = students_query.filter(Student.section == section.upper())
+            
+            all_students = students_query.all()
+            
+            # Estudiantes que sí asistieron (para saber cuáles están ausentes)
+            attended_query = db.query(Attendance).join(Student).filter(
+                func.date(Attendance.time) == target_date
+            )
+            if grade and grade.isdigit():
+                attended_query = attended_query.filter(Student.grade == int(grade))
+            if section:
+                attended_query = attended_query.filter(Student.section == section.upper())
+            
+            attended_student_ids = {att.student_id for att in attended_query.all()}
+            
+            # Agregar estudiantes ausentes a la lista existente
+            for student in all_students:
+                if student.id not in attended_student_ids:
+                    attendances.append(AbsentAttendance(student, target_date))
+            
+            print(f"[PDF DEBUG] Total registros (presente + ausentes): {len(attendances)}")
+        
+        # Crear PDF en memoria
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4)
+        elements = []
+        
+        # Estilos
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=16,
+            spaceAfter=30,
+            textColor=colors.navy,
+            alignment=TA_CENTER
+        )
+        
+        # Título del reporte
+        title = f"Reporte de Asistencia - {target_date.strftime('%d/%m/%Y')}"
+        elements.append(Paragraph(title, title_style))
+        
+        # Información de filtros aplicados
+        filter_info = []
+        if grade:
+            filter_info.append(f"Grado: {grade}")
+        if section:
+            filter_info.append(f"Sección: {section}")
+        if status:
+            filter_info.append(f"Estado: {status}")
+        
+        if filter_info:
+            filter_text = "Filtros aplicados: " + " | ".join(filter_info)
+            elements.append(Paragraph(filter_text, styles['Normal']))
+            elements.append(Spacer(1, 12))
+        
+        # Resumen estadístico
+        total_records = len(attendances)
+        if total_records > 0:
+            status_counts = {}
+            for att in attendances:
+                status_key = att.status
+                status_counts[status_key] = status_counts.get(status_key, 0) + 1
+            
+            summary_text = f"Total de registros: {total_records}<br/>"
+            for status_key, count in status_counts.items():
+                percentage = (count / total_records) * 100
+                summary_text += f"{status_key}: {count} ({percentage:.1f}%)<br/>"
+            
+            elements.append(Paragraph(summary_text, styles['Normal']))
+            elements.append(Spacer(1, 20))
+        
+        if total_records == 0:
+            elements.append(Paragraph("No se encontraron registros para los criterios especificados.", styles['Normal']))
+        else:
+            # Tabla de datos
+            data = [['N°', 'Código', 'Nombre', 'Grado', 'Sección', 'Estado', 'Hora']]
+            
+            for i, att in enumerate(attendances, 1):
+                student = att.student
+                time_str = att.time.strftime('%H:%M') if hasattr(att.time, 'strftime') and hasattr(att.time, 'hour') else '--:--'
+                
+                data.append([
+                    str(i),
+                    student.code,
+                    student.name,
+                    str(student.grade),
+                    student.section,
+                    att.status,
+                    time_str
+                ])
+            
+            # Crear tabla
+            table = Table(data)
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.navy),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 12),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                ('FONTSIZE', (0, 1), (-1, -1), 10),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black)
+            ]))
+            
+            elements.append(table)
+        
+        # Pie de página con información adicional
+        elements.append(Spacer(1, 30))
+        footer_text = f"Generado el: {datetime.now().strftime('%d/%m/%Y a las %H:%M')}<br/>Sistema EDUFACE - Control de Asistencia"
+        elements.append(Paragraph(footer_text, styles['Normal']))
+        
+        # Generar PDF
+        doc.build(elements)
+        buffer.seek(0)
+        
+        # Retornar como respuesta de streaming
+        return StreamingResponse(
+            BytesIO(buffer.read()),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=reporte_asistencia_{date}.pdf"}
+        )
+        
+    except Exception as e:
+        print(f"Error generando PDF: {e}")
+        raise HTTPException(status_code=500, detail=f"Error generando el reporte PDF: {str(e)}")
 
