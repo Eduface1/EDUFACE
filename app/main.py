@@ -274,24 +274,52 @@ async def root():
 
                 <section id='reports' class='card' style='display:none'>
                     <h2>Dashboard de Asistencia General</h2>
-                    <div class='row'>
-                        <label>Periodo
-                            <select id='period'>
-                                <option>Esta semana</option>
-                                <option>Hoy</option>
-                            </select>
-                        </label>
-                        <button id='btnRefresh'>Actualizar</button>
+                    
+                    <!-- Panel Superior: Filtros y KPIs -->
+                    <div style='background:#fff;border-radius:12px;padding:20px;margin-bottom:20px;box-shadow:0 2px 8px rgba(0,0,0,.08)'>
+                        <div class='row' style='margin-bottom:16px'>
+                            <label>Período:
+                                <select id='period'>
+                                    <option value='day'>Día</option>
+                                    <option value='week'>Semana</option>
+                                    <option value='month'>Mes</option>
+                                </select>
+                            </label>
+                            <label>Grado:
+                                <select id='grade'>
+                                    <option value=''>Todos los grados</option>
+                                    <option value='1'>1°</option>
+                                    <option value='2'>2°</option>
+                                    <option value='3'>3°</option>
+                                    <option value='4'>4°</option>
+                                    <option value='5'>5°</option>
+                                    <option value='6'>6°</option>
+                                </select>
+                            </label>
+                            <label>Sección:
+                                <select id='section'>
+                                    <option value=''>Todas las secciones</option>
+                                    <option value='A'>A</option>
+                                    <option value='B'>B</option>
+                                    <option value='C'>C</option>
+                                </select>
+                            </label>
+                            <button id='btnRefresh'>Actualizar</button>
+                        </div>
+                        <div class='kpis'>
+                            <div class='kpi'><div>Total estudiantes</div><div id='k_students' class='num'>-</div></div>
+                            <div class='kpi'><div>Registros</div><div id='k_records' class='num'>-</div></div>
+                            <div class='kpi'><div>Puntualidad</div><div id='k_punctual' class='num'>-</div></div>
+                            <div class='kpi'><div>Tarde</div><div id='k_late' class='num'>-</div></div>
+                        </div>
                     </div>
-                    <div class='kpis'>
-                        <div class='kpi'><div>Total estudiantes</div><div id='k_students' class='num'>-</div></div>
-                        <div class='kpi'><div>Registros</div><div id='k_records' class='num'>-</div></div>
-                        <div class='kpi'><div>Puntualidad</div><div id='k_punctual' class='num'>-</div></div>
-                        <div class='kpi'><div>Tarde</div><div id='k_late' class='num'>-</div></div>
-                    </div>
-                    <div class='grid2'>
-                        <div><h3>Tendencia de Asistencia Semanal</h3><canvas id='chWeekly' height='120'></canvas></div>
-                        <div><h3>Asistencia por Grado (Hoy)</h3><canvas id='chGrade' height='120'></canvas></div>
+                    
+                    <!-- Panel Inferior: Gráficos -->
+                    <div style='background:#fff;border-radius:12px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,.08)'>
+                        <div class='grid2'>
+                            <div><h3>Tendencia de Asistencia Semanal</h3><canvas id='chWeekly' height='120'></canvas></div>
+                            <div><h3>Asistencia por Grado (Hoy)</h3><canvas id='chGrade' height='120'></canvas></div>
+                        </div>
                     </div>
                 </section>
 
@@ -449,7 +477,16 @@ async def root():
                 // Reportes generales
                 let ch1, ch2, ch3, ch4;
                 async function loadSummary(){
-                    const r = await fetch('/metrics/summary');
+                    const period = document.getElementById('period').value;
+                    const grade = document.getElementById('grade').value;
+                    const section = document.getElementById('section').value;
+                    
+                    const params = new URLSearchParams();
+                    if (period) params.append('period', period);
+                    if (grade) params.append('grade', grade);
+                    if (section) params.append('section', section);
+                    
+                    const r = await fetch(`/metrics/summary?${params.toString()}`);
                     const j = await r.json();
                     k_students.textContent = j.students_total;
                     k_records.textContent = j.records_total;
@@ -842,18 +879,62 @@ def metrics_today(db: Session = Depends(get_db)):
 
 
 @app.get('/metrics/summary')
-def metrics_summary(start: Optional[date] = Query(None), end: Optional[date] = Query(None), db: Session = Depends(get_db)):
-        q = db.query(Attendance)
+def metrics_summary(
+        period: Optional[str] = Query(None, enum=['day', 'week', 'month']),
+        grade: Optional[str] = Query(None),
+        section: Optional[str] = Query(None),
+        start: Optional[date] = Query(None), 
+        end: Optional[date] = Query(None), 
+        db: Session = Depends(get_db)):
+        
+        # Definir rango de fechas según período
+        if period and not start and not end:
+                today = date.today()
+                if period == 'day':
+                        start = end = today
+                elif period == 'week':
+                        # Semana actual (lunes a domingo)
+                        days_since_monday = today.weekday()
+                        start = today - timedelta(days=days_since_monday)
+                        end = start + timedelta(days=6)
+                elif period == 'month':
+                        # Mes actual
+                        start = today.replace(day=1)
+                        if today.month == 12:
+                                end = date(today.year + 1, 1, 1) - timedelta(days=1)
+                        else:
+                                end = date(today.year, today.month + 1, 1) - timedelta(days=1)
+        
+        # Query base para attendance con join de student
+        q = db.query(Attendance).join(Student, Student.id == Attendance.student_id)
+        
+        # Filtrar por fechas
         if start:
                 q = q.filter(Attendance.date >= start)
         if end:
                 q = q.filter(Attendance.date <= end)
+        
+        # Filtrar por grado y sección
+        if grade:
+                q = q.filter(Student.grade == grade)
+        if section:
+                q = q.filter(Student.section == section)
+        
         total = q.count()
         punctual = q.filter(Attendance.status == 'Puntual').count()
         late = q.filter(Attendance.status == 'Tarde').count()
-        students_total = db.query(Student).count()
+        
+        # Query para estudiantes totales (aplicando filtros de grado/sección)
+        student_q = db.query(Student)
+        if grade:
+                student_q = student_q.filter(Student.grade == grade)
+        if section:
+                student_q = student_q.filter(Student.section == section)
+        students_total = student_q.count()
+        
         punctuality = (punctual / total * 100.0) if total else 0.0
         late_pct = (late / total * 100.0) if total else 0.0
+        
         return {
                 "students_total": students_total,
                 "records_total": total,
